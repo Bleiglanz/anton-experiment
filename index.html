@@ -139,8 +139,8 @@
 <div id="coords"></div>
 <div id="tooltip"></div>
 <div id="hint">
-  click shard — explode &middot; click monolith — attract<br>
-  hover — glow &middot; scroll — zoom &middot; drag — orbit
+  click shard — split in two &middot; click monolith — attract<br>
+  hover — glow &middot; scroll — zoom &middot; drag — orbit &middot; dblclick — reset
 </div>
 <div class="vignette"></div>
 <div class="grain"></div>
@@ -407,8 +407,77 @@ let hoveredObject = null;
 let attractMode = false;
 const attractTarget = new THREE.Vector3(0, 6, 0);
 
-// Collect all interactive meshes
-const interactiveMeshes = [monolith, ...shards.map(s => s.mesh)];
+// Collect all interactive meshes (dynamic list)
+let interactiveMeshes = [monolith, ...shards.map(s => s.mesh)];
+
+function rebuildInteractiveList() {
+  interactiveMeshes = [monolith, ...shards.map(s => s.mesh)];
+}
+
+// --- Split shard into two halves ---
+function splitShard(shardData) {
+  const parentMesh = shardData.mesh;
+  const pos = parentMesh.position.clone();
+  const rot = parentMesh.rotation.clone();
+  const parentScale = shardData.originalScale;
+
+  // Remove original from scene
+  scene.remove(parentMesh);
+  const idx = shards.indexOf(shardData);
+  if (idx > -1) shards.splice(idx, 1);
+
+  // Create two half-shards
+  for (let h = 0; h < 2; h++) {
+    const isEmissive = Math.random() > 0.6;
+    const mat = isEmissive ? shardEmissiveMat.clone() : shardBaseMat.clone();
+    const halfScale = parentScale * (0.55 + Math.random() * 0.15);
+    const half = new THREE.Mesh(shardGeo, mat);
+
+    half.position.copy(pos);
+    half.rotation.copy(rot);
+    half.rotation.x += (Math.random() - 0.5) * 0.5;
+    half.rotation.z += (Math.random() - 0.5) * 0.5;
+    half.scale.setScalar(halfScale);
+    half.castShadow = true;
+    half.userData.type = 'shard';
+
+    // Fly apart in opposite directions
+    const splitDir = new THREE.Vector3(
+      (Math.random() - 0.5),
+      (Math.random() - 0.5) * 0.5,
+      (Math.random() - 0.5)
+    ).normalize().multiplyScalar(h === 0 ? 0.3 : -0.3);
+
+    const newShardData = {
+      mesh: half,
+      orbitRadius: pos.length(),
+      orbitSpeed: (Math.random() - 0.5) * 0.08,
+      orbitOffset: Math.atan2(pos.x, pos.z),
+      floatSpeed: Math.random() * 0.4 + 0.2,
+      floatAmp: Math.random() * 0.6 + 0.2,
+      baseY: pos.y,
+      rotSpeed: new THREE.Vector3(
+        (Math.random() - 0.5) * 0.04,
+        (Math.random() - 0.5) * 0.04,
+        (Math.random() - 0.5) * 0.04
+      ),
+      velocity: splitDir,
+      exploded: true,
+      attracting: false,
+      hovered: false,
+      originalEmissive: isEmissive ? 0xc8946e : 0x000000,
+      originalEmissiveIntensity: isEmissive ? 0.6 : 0,
+      isEmissive,
+      originalScale: halfScale,
+    };
+
+    half.userData.index = shards.length;
+    shards.push(newShardData);
+    scene.add(half);
+  }
+
+  rebuildInteractiveList();
+}
 
 function onPointerMove(e) {
   pointer.x = (e.clientX / innerWidth) * 2 - 1;
@@ -430,9 +499,7 @@ function onPointerMove(e) {
     if (obj.userData.type === 'monolith') {
       tooltipEl.textContent = 'click to attract shards';
     } else {
-      const idx = obj.userData.index;
-      const s = shards[idx];
-      tooltipEl.textContent = s.exploded ? `shard ${idx} — scattered` : `shard ${idx} — click to burst`;
+      tooltipEl.textContent = 'click to split';
     }
 
     // Hover glow
@@ -440,10 +507,12 @@ function onPointerMove(e) {
       unhoverCurrent();
       hoveredObject = obj;
       if (obj.userData.type === 'shard') {
-        const s = shards[obj.userData.index];
-        obj.material.emissive = new THREE.Color(0xc8946e);
-        obj.material.emissiveIntensity = 1.2;
-        s.hovered = true;
+        const s = shards.find(sd => sd.mesh === obj);
+        if (s) {
+          obj.material.emissive = new THREE.Color(0xc8946e);
+          obj.material.emissiveIntensity = 1.2;
+          s.hovered = true;
+        }
       } else {
         obj.material.emissive = new THREE.Color(0xc8946e);
         obj.material.emissiveIntensity = 0.3;
@@ -459,10 +528,12 @@ function onPointerMove(e) {
 function unhoverCurrent() {
   if (!hoveredObject) return;
   if (hoveredObject.userData.type === 'shard') {
-    const s = shards[hoveredObject.userData.index];
-    s.hovered = false;
-    hoveredObject.material.emissive = new THREE.Color(s.originalEmissive);
-    hoveredObject.material.emissiveIntensity = s.originalEmissiveIntensity;
+    const s = shards.find(sd => sd.mesh === hoveredObject);
+    if (s) {
+      s.hovered = false;
+      hoveredObject.material.emissive = new THREE.Color(s.originalEmissive);
+      hoveredObject.material.emissiveIntensity = s.originalEmissiveIntensity;
+    }
   } else {
     hoveredObject.material.emissive = new THREE.Color(0x000000);
     hoveredObject.material.emissiveIntensity = 0;
@@ -488,24 +559,25 @@ function onClick(e) {
     // Pulse the monolith
     monolithPulse = 1.0;
   } else if (obj.userData.type === 'shard') {
-    // Explode this shard outward
-    const s = shards[obj.userData.index];
-    const dir = s.mesh.position.clone().sub(monolith.position).normalize();
-    s.velocity.copy(dir.multiplyScalar(0.4 + Math.random() * 0.3));
-    s.velocity.y += Math.random() * 0.2;
-    s.exploded = true;
-    s.attracting = false;
+    // Find the shard data by mesh reference (index may have shifted)
+    const s = shards.find(sd => sd.mesh === obj);
+    if (!s) return;
 
-    // Also push nearby shards
+    // Push nearby shards before splitting
+    const splitPos = s.mesh.position.clone();
     for (const other of shards) {
       if (other === s) continue;
-      const dist = other.mesh.position.distanceTo(s.mesh.position);
+      const dist = other.mesh.position.distanceTo(splitPos);
       if (dist < 5) {
-        const pushDir = other.mesh.position.clone().sub(s.mesh.position).normalize();
+        const pushDir = other.mesh.position.clone().sub(splitPos).normalize();
         other.velocity.add(pushDir.multiplyScalar(0.15 / (dist * 0.5 + 0.5)));
         other.exploded = true;
       }
     }
+
+    // Split into two halves
+    unhoverCurrent();
+    splitShard(s);
   }
 }
 
