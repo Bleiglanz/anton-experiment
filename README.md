@@ -1,6 +1,6 @@
 # Anton Experiment 
 
-test workfliw
+test workflow
 
 Interactive Three.js scene featuring a floating obsidian monolith surrounded by orbiting shards.
 
