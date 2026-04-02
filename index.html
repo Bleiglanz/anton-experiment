@@ -139,7 +139,7 @@
 <div id="coords"></div>
 <div id="tooltip"></div>
 <div id="hint">
-  click shard — split in two &middot; click monolith — attract<br>
+  click shard — split in two &middot; click monolith — explode<br>
   hover — glow &middot; scroll — zoom &middot; drag — orbit &middot; dblclick — reset
 </div>
 <div class="vignette"></div>
@@ -479,6 +479,82 @@ function splitShard(shardData) {
   rebuildInteractiveList();
 }
 
+// --- Explode Monolith into fragments ---
+let monolithExploded = false;
+
+function explodeMonolith() {
+  if (monolithExploded) return;
+  monolithExploded = true;
+
+  const center = monolith.position.clone();
+  scene.remove(monolith);
+
+  // Spawn ~20 fragments from the monolith body
+  const fragmentCount = 20;
+  for (let i = 0; i < fragmentCount; i++) {
+    const isEmissive = Math.random() > 0.5;
+    const mat = isEmissive ? shardEmissiveMat.clone() : obsidianMat.clone();
+    const scale = 0.4 + Math.random() * 0.8;
+    const frag = new THREE.Mesh(shardGeo, mat);
+
+    // Spread fragments from monolith volume
+    frag.position.set(
+      center.x + (Math.random() - 0.5) * 2,
+      center.y + (Math.random() - 0.5) * 10,
+      center.z + (Math.random() - 0.5) * 2
+    );
+    frag.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+    frag.scale.setScalar(scale);
+    frag.castShadow = true;
+    frag.userData.type = 'shard';
+
+    // Explode outward from center
+    const dir = frag.position.clone().sub(center).normalize();
+    dir.y += Math.random() * 0.5;
+    const speed = 0.2 + Math.random() * 0.4;
+
+    const fragData = {
+      mesh: frag,
+      orbitRadius: 5 + Math.random() * 10,
+      orbitSpeed: (Math.random() - 0.5) * 0.08,
+      orbitOffset: Math.atan2(dir.x, dir.z),
+      floatSpeed: Math.random() * 0.4 + 0.2,
+      floatAmp: Math.random() * 0.6 + 0.2,
+      baseY: frag.position.y,
+      rotSpeed: new THREE.Vector3(
+        (Math.random() - 0.5) * 0.06,
+        (Math.random() - 0.5) * 0.06,
+        (Math.random() - 0.5) * 0.06
+      ),
+      velocity: dir.multiplyScalar(speed),
+      exploded: true,
+      attracting: false,
+      hovered: false,
+      originalEmissive: isEmissive ? 0xc8946e : 0x000000,
+      originalEmissiveIntensity: isEmissive ? 0.6 : 0,
+      isEmissive,
+      originalScale: scale,
+    };
+
+    frag.userData.index = shards.length;
+    shards.push(fragData);
+    scene.add(frag);
+  }
+
+  // Also blast all existing shards outward
+  for (const s of shards) {
+    const dir = s.mesh.position.clone().sub(center);
+    const dist = dir.length();
+    if (dist < 20) {
+      dir.normalize().multiplyScalar(0.3 / (dist * 0.1 + 0.5));
+      s.velocity.add(dir);
+      s.exploded = true;
+    }
+  }
+
+  rebuildInteractiveList();
+}
+
 function onPointerMove(e) {
   pointer.x = (e.clientX / innerWidth) * 2 - 1;
   pointer.y = -(e.clientY / innerHeight) * 2 + 1;
@@ -497,7 +573,7 @@ function onPointerMove(e) {
     tooltipEl.style.opacity = '1';
 
     if (obj.userData.type === 'monolith') {
-      tooltipEl.textContent = 'click to attract shards';
+      tooltipEl.textContent = 'click to explode';
     } else {
       tooltipEl.textContent = 'click to split';
     }
@@ -550,14 +626,9 @@ function onClick(e) {
   const obj = intersects[0].object;
 
   if (obj.userData.type === 'monolith') {
-    // Attract all shards toward monolith
-    attractMode = true;
-    for (const s of shards) {
-      s.attracting = true;
-      s.exploded = false;
-    }
-    // Pulse the monolith
-    monolithPulse = 1.0;
+    // Explode monolith into many shards
+    unhoverCurrent();
+    explodeMonolith();
   } else if (obj.userData.type === 'shard') {
     // Find the shard data by mesh reference (index may have shifted)
     const s = shards.find(sd => sd.mesh === obj);
@@ -586,7 +657,7 @@ let monolithPulse = 0;
 document.addEventListener('pointermove', onPointerMove);
 document.addEventListener('click', onClick);
 
-// Double-click to reset
+// Double-click to reset everything
 document.addEventListener('dblclick', () => {
   for (const s of shards) {
     s.exploded = false;
@@ -594,6 +665,15 @@ document.addEventListener('dblclick', () => {
     s.velocity.set(0, 0, 0);
   }
   attractMode = false;
+
+  // Restore monolith if exploded
+  if (monolithExploded) {
+    monolithExploded = false;
+    monolith.position.set(0, 6, 0);
+    monolith.scale.set(1, 1, 1);
+    scene.add(monolith);
+    rebuildInteractiveList();
+  }
 });
 
 // --- Resize ---
@@ -615,20 +695,22 @@ function animate() {
 
   controls.update();
 
-  // Monolith subtle float + pulse
-  monolith.position.y = 6 + Math.sin(t * 0.3) * 0.15;
-  monolith.rotation.y = t * 0.05;
+  // Monolith subtle float + pulse (skip if exploded)
+  if (!monolithExploded) {
+    monolith.position.y = 6 + Math.sin(t * 0.3) * 0.15;
+    monolith.rotation.y = t * 0.05;
 
-  if (monolithPulse > 0) {
-    monolithPulse *= 0.95;
-    const s = 1 + monolithPulse * 0.08;
-    monolith.scale.set(s, s, s);
-    obsidianMat.emissive = new THREE.Color(0xc8946e);
-    obsidianMat.emissiveIntensity = monolithPulse * 0.5;
-  } else {
-    monolith.scale.set(1, 1, 1);
-    obsidianMat.emissive = new THREE.Color(0x000000);
-    obsidianMat.emissiveIntensity = 0;
+    if (monolithPulse > 0) {
+      monolithPulse *= 0.95;
+      const sc = 1 + monolithPulse * 0.08;
+      monolith.scale.set(sc, sc, sc);
+      obsidianMat.emissive = new THREE.Color(0xc8946e);
+      obsidianMat.emissiveIntensity = monolithPulse * 0.5;
+    } else {
+      monolith.scale.set(1, 1, 1);
+      obsidianMat.emissive = new THREE.Color(0x000000);
+      obsidianMat.emissiveIntensity = 0;
+    }
   }
 
   // Shards
