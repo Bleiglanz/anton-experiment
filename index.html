@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Obsidian Monolith</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;600&family=JetBrains+Mono:wght@300&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #f0ece6;
+    overflow: hidden;
+    font-family: 'Cormorant Garamond', serif;
+  }
+
+  canvas { display: block; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+
+  #title {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 20;
+    text-align: center;
+    pointer-events: none;
+    opacity: 0;
+    animation: fadeIn 3s ease 1s forwards;
+  }
+
+  #title h1 {
+    font-family: 'Cormorant Garamond', serif;
+    font-weight: 300;
+    font-size: clamp(2.5rem, 6vw, 5.5rem);
+    color: #2a2520;
+    letter-spacing: 0.35em;
+    text-transform: uppercase;
+    text-shadow: 0 2px 40px rgba(200, 160, 100, 0.2);
+    margin-bottom: 1rem;
+  }
+
+  #title p {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 300;
+    font-size: clamp(0.55rem, 1.2vw, 0.75rem);
+    color: rgba(80, 60, 40, 0.4);
+    letter-spacing: 0.6em;
+    text-transform: uppercase;
+  }
+
+  #coords {
+    position: fixed;
+    bottom: 2rem;
+    right: 2.5rem;
+    z-index: 20;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 300;
+    font-size: 0.6rem;
+    color: rgba(80, 60, 40, 0.3);
+    letter-spacing: 0.15em;
+    text-align: right;
+    line-height: 1.8;
+  }
+
+  #tooltip {
+    position: fixed;
+    z-index: 30;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    color: #f0ece6;
+    background: rgba(40, 35, 30, 0.85);
+    backdrop-filter: blur(8px);
+    padding: 0.5rem 0.8rem;
+    border-radius: 4px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+  }
+
+  #hint {
+    position: fixed;
+    bottom: 2rem;
+    left: 2.5rem;
+    z-index: 20;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 300;
+    font-size: 0.6rem;
+    color: rgba(80, 60, 40, 0.3);
+    letter-spacing: 0.1em;
+    line-height: 2;
+    opacity: 0;
+    animation: fadeIn 2s ease 3s forwards;
+  }
+
+  .vignette {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: radial-gradient(ellipse at center, transparent 50%, rgba(220,215,205,0.6) 100%);
+    pointer-events: none;
+    z-index: 5;
+  }
+
+  .grain {
+    position: fixed;
+    top: -50%; left: -50%;
+    width: 200%; height: 200%;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 6;
+    opacity: 0.35;
+    animation: grainShift 0.5s steps(1) infinite;
+  }
+
+  @keyframes fadeIn {
+    to { opacity: 1; }
+  }
+
+  @keyframes grainShift {
+    0% { transform: translate(0, 0); }
+    25% { transform: translate(-2%, 3%); }
+    50% { transform: translate(1%, -1%); }
+    75% { transform: translate(-3%, 2%); }
+    100% { transform: translate(2%, -2%); }
+  }
+</style>
+</head>
+<body>
+
+<div id="title">
+  <h1>Anton Experiment</h1>
+  <p>An exercise in digital erosion</p>
+</div>
+
+<div id="coords"></div>
+<div id="tooltip"></div>
+<div id="hint">
+  click shard — explode &middot; click monolith — attract<br>
+  hover — glow &middot; scroll — zoom &middot; drag — orbit
+</div>
+<div class="vignette"></div>
+<div class="grain"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+
+// --- Scene Setup ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf0ece6);
+scene.fog = new THREE.FogExp2(0xf0ece6, 0.012);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 200);
+camera.position.set(0, 8, 22);
+camera.lookAt(0, 2, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.prepend(renderer.domElement);
+
+// --- OrbitControls ---
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.minDistance = 5;
+controls.maxDistance = 60;
+controls.maxPolarAngle = Math.PI * 0.85;
+controls.target.set(0, 4, 0);
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.5;
+controls.update();
+
+// --- Post Processing ---
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.3, 0.6, 0.85);
+composer.addPass(bloom);
+
+const chromaticAberration = {
+  uniforms: {
+    tDiffuse: { value: null },
+    amount: { value: 0.0005 },
+  },
+  vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float amount;
+    varying vec2 vUv;
+    void main() {
+      vec2 offset = amount * (vUv - 0.5);
+      float r = texture2D(tDiffuse, vUv + offset).r;
+      float g = texture2D(tDiffuse, vUv).g;
+      float b = texture2D(tDiffuse, vUv - offset).b;
+      gl_FragColor = vec4(r, g, b, 1.0);
+    }
+  `
+};
+composer.addPass(new ShaderPass(chromaticAberration));
+
+// --- Materials ---
+const obsidianMat = new THREE.MeshPhysicalMaterial({
+  color: 0x1a1a1f,
+  metalness: 0.2,
+  roughness: 0.12,
+  clearcoat: 1.0,
+  clearcoatRoughness: 0.08,
+  reflectivity: 1.0,
+  envMapIntensity: 0.6,
+});
+
+const shardBaseMat = new THREE.MeshPhysicalMaterial({
+  color: 0x2a2520,
+  metalness: 0.15,
+  roughness: 0.2,
+  clearcoat: 0.8,
+  clearcoatRoughness: 0.1,
+  reflectivity: 0.8,
+});
+
+const shardEmissiveMat = new THREE.MeshStandardMaterial({
+  color: 0x3a2a1a,
+  emissive: 0xc8946e,
+  emissiveIntensity: 0.6,
+  roughness: 0.4,
+  metalness: 0.15,
+});
+
+const groundMat = new THREE.MeshStandardMaterial({
+  color: 0xe0dbd3,
+  roughness: 0.9,
+  metalness: 0.02,
+});
+
+// --- Central Monolith ---
+const monolithGeo = new THREE.BoxGeometry(2.2, 12, 2.2, 4, 16, 4);
+const posAttr = monolithGeo.attributes.position;
+for (let i = 0; i < posAttr.count; i++) {
+  const y = posAttr.getY(i);
+  const erosion = Math.sin(y * 1.2) * 0.15 + Math.sin(y * 3.7) * 0.08;
+  posAttr.setX(i, posAttr.getX(i) + erosion * (Math.random() * 0.5 + 0.5));
+  posAttr.setZ(i, posAttr.getZ(i) + erosion * (Math.random() * 0.5 + 0.5));
+}
+monolithGeo.computeVertexNormals();
+
+const monolith = new THREE.Mesh(monolithGeo, obsidianMat);
+monolith.position.set(0, 6, 0);
+monolith.castShadow = true;
+monolith.receiveShadow = true;
+monolith.userData.type = 'monolith';
+scene.add(monolith);
+
+// --- Floating Shards ---
+const shards = [];
+const shardGeo = new THREE.TetrahedronGeometry(1, 0);
+
+for (let i = 0; i < 40; i++) {
+  const scale = Math.random() * 0.6 + 0.15;
+  const isEmissive = Math.random() > 0.75;
+  const mat = isEmissive ? shardEmissiveMat.clone() : shardBaseMat.clone();
+  const shard = new THREE.Mesh(shardGeo, mat);
+
+  const angle = Math.random() * Math.PI * 2;
+  const radius = 4 + Math.random() * 14;
+  const height = Math.random() * 16 - 2;
+
+  shard.position.set(Math.cos(angle) * radius, height, Math.sin(angle) * radius);
+  shard.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+  shard.scale.setScalar(scale);
+  shard.castShadow = true;
+  shard.userData.type = 'shard';
+  shard.userData.index = i;
+
+  const shardData = {
+    mesh: shard,
+    orbitRadius: radius,
+    orbitSpeed: (Math.random() - 0.5) * 0.08,
+    orbitOffset: angle,
+    floatSpeed: Math.random() * 0.4 + 0.2,
+    floatAmp: Math.random() * 0.6 + 0.2,
+    baseY: height,
+    rotSpeed: new THREE.Vector3(
+      (Math.random() - 0.5) * 0.02,
+      (Math.random() - 0.5) * 0.02,
+      (Math.random() - 0.5) * 0.02
+    ),
+    // Interaction state
+    velocity: new THREE.Vector3(),
+    exploded: false,
+    attracting: false,
+    hovered: false,
+    originalEmissive: isEmissive ? 0xc8946e : 0x000000,
+    originalEmissiveIntensity: isEmissive ? 0.6 : 0,
+    isEmissive,
+    originalScale: scale,
+  };
+
+  shards.push(shardData);
+  scene.add(shard);
+}
+
+// --- Ground Plane ---
+const groundGeo = new THREE.PlaneGeometry(120, 120);
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.1;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// --- Ground Cracks ---
+const crackMat = new THREE.LineBasicMaterial({ color: 0xb8a088, transparent: true, opacity: 0.15 });
+for (let i = 0; i < 25; i++) {
+  const points = [];
+  let x = (Math.random() - 0.5) * 20;
+  let z = (Math.random() - 0.5) * 20;
+  const segments = Math.floor(Math.random() * 6) + 3;
+  for (let j = 0; j < segments; j++) {
+    points.push(new THREE.Vector3(x, 0.01, z));
+    x += (Math.random() - 0.5) * 4;
+    z += (Math.random() - 0.5) * 4;
+  }
+  const crackGeo = new THREE.BufferGeometry().setFromPoints(points);
+  scene.add(new THREE.Line(crackGeo, crackMat));
+}
+
+// --- Dust Particles ---
+const particleCount = 1500;
+const particleGeo = new THREE.BufferGeometry();
+const particlePositions = new Float32Array(particleCount * 3);
+
+for (let i = 0; i < particleCount; i++) {
+  particlePositions[i * 3] = (Math.random() - 0.5) * 60;
+  particlePositions[i * 3 + 1] = Math.random() * 25;
+  particlePositions[i * 3 + 2] = (Math.random() - 0.5) * 60;
+}
+
+particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+
+const particleMat = new THREE.PointsMaterial({
+  color: 0x8a7a66,
+  size: 0.05,
+  transparent: true,
+  opacity: 0.3,
+  sizeAttenuation: true,
+  depthWrite: false,
+});
+
+const particles = new THREE.Points(particleGeo, particleMat);
+scene.add(particles);
+
+// --- Lighting (bright, soft for light theme) ---
+const ambientLight = new THREE.AmbientLight(0xfff8f0, 0.8);
+scene.add(ambientLight);
+
+const hemisphereLight = new THREE.HemisphereLight(0xfff8ee, 0xe0d8cc, 0.6);
+scene.add(hemisphereLight);
+
+const keyLight = new THREE.SpotLight(0xffeedd, 25, 60, Math.PI / 5, 0.6, 1.2);
+keyLight.position.set(8, 20, 10);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(2048, 2048);
+keyLight.shadow.bias = -0.001;
+keyLight.target = monolith;
+scene.add(keyLight);
+
+const rimLight = new THREE.PointLight(0x99aabb, 5, 40);
+rimLight.position.set(-10, 12, -8);
+scene.add(rimLight);
+
+const fillLight = new THREE.PointLight(0xeeddcc, 4, 30);
+fillLight.position.set(5, 3, 15);
+scene.add(fillLight);
+
+const bottomGlow = new THREE.PointLight(0xc8946e, 2, 10);
+bottomGlow.position.set(0, 0.5, 0);
+scene.add(bottomGlow);
+
+// --- Raycaster for Interaction ---
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const tooltipEl = document.getElementById('tooltip');
+const coordsEl = document.getElementById('coords');
+
+let hoveredObject = null;
+let attractMode = false;
+const attractTarget = new THREE.Vector3(0, 6, 0);
+
+// Collect all interactive meshes
+const interactiveMeshes = [monolith, ...shards.map(s => s.mesh)];
+
+function onPointerMove(e) {
+  pointer.x = (e.clientX / innerWidth) * 2 - 1;
+  pointer.y = -(e.clientY / innerHeight) * 2 + 1;
+
+  // Raycast
+  raycaster.setFromCamera(pointer, camera);
+  const intersects = raycaster.intersectObjects(interactiveMeshes);
+
+  if (intersects.length > 0) {
+    const obj = intersects[0].object;
+    renderer.domElement.style.cursor = 'pointer';
+
+    // Show tooltip
+    tooltipEl.style.left = (e.clientX + 14) + 'px';
+    tooltipEl.style.top = (e.clientY - 10) + 'px';
+    tooltipEl.style.opacity = '1';
+
+    if (obj.userData.type === 'monolith') {
+      tooltipEl.textContent = 'click to attract shards';
+    } else {
+      const idx = obj.userData.index;
+      const s = shards[idx];
+      tooltipEl.textContent = s.exploded ? `shard ${idx} — scattered` : `shard ${idx} — click to burst`;
+    }
+
+    // Hover glow
+    if (hoveredObject !== obj) {
+      unhoverCurrent();
+      hoveredObject = obj;
+      if (obj.userData.type === 'shard') {
+        const s = shards[obj.userData.index];
+        obj.material.emissive = new THREE.Color(0xc8946e);
+        obj.material.emissiveIntensity = 1.2;
+        s.hovered = true;
+      } else {
+        obj.material.emissive = new THREE.Color(0xc8946e);
+        obj.material.emissiveIntensity = 0.3;
+      }
+    }
+  } else {
+    renderer.domElement.style.cursor = 'grab';
+    tooltipEl.style.opacity = '0';
+    unhoverCurrent();
+  }
+}
+
+function unhoverCurrent() {
+  if (!hoveredObject) return;
+  if (hoveredObject.userData.type === 'shard') {
+    const s = shards[hoveredObject.userData.index];
+    s.hovered = false;
+    hoveredObject.material.emissive = new THREE.Color(s.originalEmissive);
+    hoveredObject.material.emissiveIntensity = s.originalEmissiveIntensity;
+  } else {
+    hoveredObject.material.emissive = new THREE.Color(0x000000);
+    hoveredObject.material.emissiveIntensity = 0;
+  }
+  hoveredObject = null;
+}
+
+function onClick(e) {
+  raycaster.setFromCamera(pointer, camera);
+  const intersects = raycaster.intersectObjects(interactiveMeshes);
+
+  if (intersects.length === 0) return;
+
+  const obj = intersects[0].object;
+
+  if (obj.userData.type === 'monolith') {
+    // Attract all shards toward monolith
+    attractMode = true;
+    for (const s of shards) {
+      s.attracting = true;
+      s.exploded = false;
+    }
+    // Pulse the monolith
+    monolithPulse = 1.0;
+  } else if (obj.userData.type === 'shard') {
+    // Explode this shard outward
+    const s = shards[obj.userData.index];
+    const dir = s.mesh.position.clone().sub(monolith.position).normalize();
+    s.velocity.copy(dir.multiplyScalar(0.4 + Math.random() * 0.3));
+    s.velocity.y += Math.random() * 0.2;
+    s.exploded = true;
+    s.attracting = false;
+
+    // Also push nearby shards
+    for (const other of shards) {
+      if (other === s) continue;
+      const dist = other.mesh.position.distanceTo(s.mesh.position);
+      if (dist < 5) {
+        const pushDir = other.mesh.position.clone().sub(s.mesh.position).normalize();
+        other.velocity.add(pushDir.multiplyScalar(0.15 / (dist * 0.5 + 0.5)));
+        other.exploded = true;
+      }
+    }
+  }
+}
+
+let monolithPulse = 0;
+
+document.addEventListener('pointermove', onPointerMove);
+document.addEventListener('click', onClick);
+
+// Double-click to reset
+document.addEventListener('dblclick', () => {
+  for (const s of shards) {
+    s.exploded = false;
+    s.attracting = false;
+    s.velocity.set(0, 0, 0);
+  }
+  attractMode = false;
+});
+
+// --- Resize ---
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+
+// --- Animation Loop ---
+const clock = new THREE.Clock();
+const tmpVec = new THREE.Vector3();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  controls.update();
+
+  // Monolith subtle float + pulse
+  monolith.position.y = 6 + Math.sin(t * 0.3) * 0.15;
+  monolith.rotation.y = t * 0.05;
+
+  if (monolithPulse > 0) {
+    monolithPulse *= 0.95;
+    const s = 1 + monolithPulse * 0.08;
+    monolith.scale.set(s, s, s);
+    obsidianMat.emissive = new THREE.Color(0xc8946e);
+    obsidianMat.emissiveIntensity = monolithPulse * 0.5;
+  } else {
+    monolith.scale.set(1, 1, 1);
+    obsidianMat.emissive = new THREE.Color(0x000000);
+    obsidianMat.emissiveIntensity = 0;
+  }
+
+  // Shards
+  for (const s of shards) {
+    if (s.attracting) {
+      // Pull toward monolith center
+      tmpVec.copy(attractTarget).sub(s.mesh.position);
+      const dist = tmpVec.length();
+      if (dist > 3) {
+        tmpVec.normalize().multiplyScalar(0.02);
+        s.velocity.add(tmpVec);
+      } else {
+        s.attracting = false;
+        s.velocity.multiplyScalar(0.5);
+      }
+    }
+
+    if (s.exploded || s.velocity.lengthSq() > 0.0001) {
+      // Apply velocity
+      s.mesh.position.add(s.velocity);
+      // Damping
+      s.velocity.multiplyScalar(0.97);
+      // Spin faster when moving
+      s.mesh.rotation.x += s.velocity.x * 2;
+      s.mesh.rotation.z += s.velocity.z * 2;
+      // Scale bounce on impact
+      const speed = s.velocity.length();
+      const scaleMod = 1 + speed * 0.5;
+      s.mesh.scale.setScalar(s.originalScale * scaleMod);
+    } else {
+      // Normal orbit & float
+      const a = s.orbitOffset + t * s.orbitSpeed;
+      s.mesh.position.x = Math.cos(a) * s.orbitRadius;
+      s.mesh.position.z = Math.sin(a) * s.orbitRadius;
+      s.mesh.position.y = s.baseY + Math.sin(t * s.floatSpeed) * s.floatAmp;
+      s.mesh.rotation.x += s.rotSpeed.x;
+      s.mesh.rotation.y += s.rotSpeed.y;
+      s.mesh.rotation.z += s.rotSpeed.z;
+      s.mesh.scale.setScalar(s.originalScale);
+    }
+
+    // Hover pulse
+    if (s.hovered) {
+      const pulse = 1 + Math.sin(t * 8) * 0.08;
+      s.mesh.scale.multiplyScalar(pulse);
+    }
+  }
+
+  // Particles drift
+  const pPos = particles.geometry.attributes.position.array;
+  for (let i = 0; i < particleCount; i++) {
+    pPos[i * 3 + 1] += 0.002;
+    if (pPos[i * 3 + 1] > 25) pPos[i * 3 + 1] = -1;
+  }
+  particles.geometry.attributes.position.needsUpdate = true;
+  particles.rotation.y = t * 0.003;
+
+  // Pulsing lights
+  bottomGlow.intensity = 2 + Math.sin(t * 0.8) * 1;
+  keyLight.intensity = 25 + Math.sin(t * 0.5) * 5;
+
+  // Coords HUD
+  coordsEl.innerHTML =
+    `x ${camera.position.x.toFixed(2)}<br>` +
+    `y ${camera.position.y.toFixed(2)}<br>` +
+    `z ${camera.position.z.toFixed(2)}<br>` +
+    `t ${t.toFixed(1)}`;
+
+  composer.render();
+}
+
+animate();
+</script>
+</body>
+</html>
